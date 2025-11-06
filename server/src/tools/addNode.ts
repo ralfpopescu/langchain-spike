@@ -12,6 +12,7 @@ export const AddNodeArgsSchema = z.object({
 export type AddNodeArgs = z.infer<typeof AddNodeArgsSchema>;
 
 export async function addNodeTool(sessionId: string, args: AddNodeArgs) {
+  console.log(`[${new Date().toISOString()}] 🔧 addNodeTool called: ${JSON.stringify(args, null, 2)}`);
   const id = uuid();
   const started = {
     id,
@@ -25,8 +26,8 @@ export async function addNodeTool(sessionId: string, args: AddNodeArgs) {
 
   const attrString = args.attributes
     ? Object.entries(args.attributes)
-        .map(([k, v]) => `${k}="${v.replaceAll('"', '&quot;')}"`)
-        .join(" ")
+      .map(([k, v]) => `${k}="${v.replaceAll('"', '&quot;')}"`)
+      .join(" ")
     : "";
   const open = attrString.length > 0 ? `<${args.tag} ${attrString}>` : `<${args.tag}>`;
   const text = args.text ?? "";
@@ -63,6 +64,7 @@ export async function addNodeTool(sessionId: string, args: AddNodeArgs) {
   };
   await pubsub.publish(topics.toolEvent(sessionId), { toolEvent: completed });
 
+  console.log(`[${new Date().toISOString()}] 🔧 addNodeTool completed: ${JSON.stringify({ id, html, index }, null, 2)}`);
   return { id, html, index };
 }
 
