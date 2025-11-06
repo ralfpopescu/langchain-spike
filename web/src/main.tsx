@@ -53,9 +53,15 @@ const SUB_COMPLETE = gql`
   subscription Done($sessionId: ID!) { modelMessageCompleted(sessionId: $sessionId) }
 `;
 
+const prompt = `First, you're going to starting telling a poem. Then, pick an interesting phrase from the poem to put in the h1. 
+Then, continue telling the poem. 
+Do this until you've made 3 h1s.
+Do NOT put the full poem in the h1s. I want you to tell a bit of a story, call a tool, tell a bit more story, call a tool, etc.
+`
+
 function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [input, setInput] = useState("make a simple todo list");
+  const [input, setInput] = useState("First, you're going to tell a poem. Then, big an interesting phrase from the poem to put in the h1. Then, continue telling the poem. Do this until you've made 3 h1s.");
   const [modelBuffer, setModelBuffer] = useState("");
   const toolEventsRef = useRef<any[]>([]);
   const docRef = useRef<string>("");

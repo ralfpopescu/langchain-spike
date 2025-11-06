@@ -4,7 +4,7 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { AgentExecutor, createToolCallingAgent } from "langchain/agents";
 import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { addNodeTool, AddNodeArgsSchema } from "./tools/addNode.js";
+import { addNodeTool, AddNodeArgsSchema, AddNodeArgs } from "./tools/addNode.js";
 import { pubsub, topics } from "./pubsub.js";
 import { appendMessage, listMessages } from "./store.js";
 
@@ -16,11 +16,11 @@ Rules:
 - When done, reply with a short summary of what was built.`;
 
 function createAddNodeTool(sessionId: string) {
-  return new DynamicStructuredTool({
+  const tool = new DynamicStructuredTool({
     name: "add_node",
     description: "Append an HTML element to the end of the <body> of the current document. Use for adding UI elements. Accepts tag, optional text, and attributes.",
     schema: AddNodeArgsSchema,
-    func: async (input: z.infer<typeof AddNodeArgsSchema>) => {
+    func: async (input: AddNodeArgs): Promise<string> => {
       console.log(`[${new Date().toISOString()}] 🔧 Tool called: add_node (session: ${sessionId})`);
       console.log(`[${new Date().toISOString()}] 🔧 Tool args:`, JSON.stringify(input, null, 2));
       const result = await addNodeTool(sessionId, input);
@@ -28,6 +28,7 @@ function createAddNodeTool(sessionId: string) {
       return JSON.stringify({ ok: true, index: result.index });
     },
   });
+  return tool;
 }
 
 export async function runAgentStreaming(sessionId: string, userInput: string) {
@@ -37,6 +38,7 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
   const model = new ChatOpenAI({
     model: process.env.OPENAI_MODEL || "gpt-4o-mini",
     temperature: 0,
+    streaming: true,
   });
 
   const tools = [createAddNodeTool(sessionId)];
@@ -74,15 +76,63 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
   console.log(`[${new Date().toISOString()}] 🔄 Executing LLM agent (session: ${sessionId}, history length: ${history.length})`);
   console.log(`[${new Date().toISOString()}] 📋 Chat history:`, JSON.stringify(history, null, 2));
 
-  // Execute agent without callbacks to avoid interference
+  // Execute agent with streaming callbacks
   console.log(`[${new Date().toISOString()}] ⏳ Starting agent execution...`);
+
+  // Track LLM call state to distinguish tool-planning from final response
+  let currentLLMStart: any = null;
+  let hasToolCalls = false;
 
   let result;
   try {
-    result = await executor.invoke({
-      input: userInput,
-      chat_history: history,
-    });
+    result = await executor.invoke(
+      {
+        input: userInput,
+        chat_history: history,
+      },
+      {
+        callbacks: [
+          {
+            handleLLMStart: async (llm, prompts, runId) => {
+              // Track start of new LLM call
+              currentLLMStart = { runId, hasStreamedTokens: false };
+              console.log(`[${new Date().toISOString()}] 🤖 LLM call started (runId: ${runId})`);
+            },
+            handleLLMEnd: async (output, runId) => {
+              // Check if this LLM call resulted in tool calls
+              const hasToolCallsInOutput = output?.generations?.[0]?.[0]?.message?.additional_kwargs?.tool_calls;
+              if (hasToolCallsInOutput) {
+                hasToolCalls = true;
+                console.log(`[${new Date().toISOString()}] 🔧 LLM call ended with tool calls (runId: ${runId})`);
+              } else {
+                console.log(`[${new Date().toISOString()}] ✅ LLM call ended without tool calls (runId: ${runId})`);
+              }
+              currentLLMStart = null;
+            },
+            handleAgentAction: async (action) => {
+              console.log(`[${new Date().toISOString()}] 🔧 Agent executing tool: ${action.tool}`);
+            },
+            handleToolEnd: async (output) => {
+              console.log(`[${new Date().toISOString()}] 🔧 Tool completed, output length: ${output.length}`);
+            },
+            handleLLMNewToken: async (token) => {
+              // Stream all tokens - OpenAI function calling returns either:
+              // - Tool calls (no content tokens, or minimal/structured tokens we can filter)
+              // - Text response (content tokens we want to stream)
+              // We'll stream everything and let the natural flow work
+              tokenCount++;
+              allTokens += token;
+              console.log(`[${new Date().toISOString()}] 🔄 Token #${tokenCount}: "${token}"`);
+              
+              // Publish token to subscription
+              await pubsub.publish(topics.messageDelta(sessionId), {
+                messageDelta: { contentDelta: token },
+              });
+            },
+          },
+        ],
+      }
+    );
 
     console.log(`[${new Date().toISOString()}] ⏳ Agent execution completed`);
   } catch (error) {
