@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GraphQL Streaming Chat UI Builder</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, Arial; margin: 0; padding: 0; display: grid; grid-template-columns: 360px 1fr; height: 100vh; }
+      .sidebar { border-right: 1px solid #eee; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+      .messages { flex: 1; overflow-y: auto; border: 1px solid #eee; padding: 8px; background: #fafafa; }
+      .input { display: flex; gap: 8px; }
+      .input input { flex: 1; padding: 8px; }
+      .doc { padding: 16px; }
+      .doc .canvas { border-left: 1px solid #eee; height: 100%; padding: 16px; overflow: auto; }
+      .tool { font-family: monospace; background: #fff7ed; border: 1px solid #fed7aa; padding: 6px; margin: 4px 0; }
+      pre { white-space: pre-wrap; word-wrap: break-word; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+  </html>
+
