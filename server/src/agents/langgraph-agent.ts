@@ -26,11 +26,12 @@ export class LangGraphAgent implements AgentWrapper {
             streaming: true,
         });
 
-        // Convert AgentTool to LangGraph format
+        // Convert AgentTool (with Zod schema) to LangGraph format
+        // LangGraph tools also accept Zod schemas natively
         this.tools = tools.map(tool => ({
             name: tool.name,
             description: tool.description,
-            schema: tool.schema,
+            schema: tool.schema, // Zod schema used by LangGraph for validation
             invoke: tool.func,
             call: async function (input: string) {
                 const parsed = JSON.parse(input);

@@ -11,7 +11,7 @@ import type { AgentWrapper, AgentTool, AgentResponse, StreamingCallbacks } from 
 
 export class LangChainAgent implements AgentWrapper {
     private model: ChatOpenAI;
-    private tools: DynamicStructuredTool[];
+    private tools: DynamicStructuredTool<any>[];
     private systemPrompt: string;
     private maxIterations: number;
 
@@ -31,12 +31,17 @@ export class LangChainAgent implements AgentWrapper {
         });
 
         // Convert AgentTool to LangChain DynamicStructuredTool
-        this.tools = tools.map(tool => new DynamicStructuredTool({
-            name: tool.name,
-            description: tool.description,
-            schema: tool.schema,
-            func: tool.func,
-        }));
+        // LangChain's DynamicStructuredTool accepts Zod schemas directly
+        // Cast config to prevent TypeScript from deeply inferring Zod schema types
+        this.tools = tools.map(tool => {
+            const config: any = {
+                name: tool.name,
+                description: tool.description,
+                schema: tool.schema,
+                func: tool.func,
+            };
+            return new DynamicStructuredTool(config);
+        });
     }
 
     async executeStreaming(

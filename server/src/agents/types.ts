@@ -2,6 +2,8 @@
  * Agent framework types and interfaces
  */
 
+import type { z } from "zod";
+
 export type AgentFramework = "langchain" | "langgraph";
 
 export interface AgentConfig {
@@ -17,11 +19,15 @@ export interface StreamingCallbacks {
   onComplete?: () => Promise<void>;
 }
 
-export interface AgentTool {
+/**
+ * Tool definition with Zod schema for input validation
+ * The schema will be translated to framework-specific formats by each wrapper
+ */
+export interface AgentTool<TInput = any> {
   name: string;
   description: string;
-  schema: any;
-  func: (input: any) => Promise<string>;
+  schema: z.ZodType<TInput>;
+  func: (input: TInput) => Promise<string>;
 }
 
 export interface AgentResponse {

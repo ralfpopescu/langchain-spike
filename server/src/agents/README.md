@@ -110,16 +110,58 @@ case "my-framework":
 
 ## Tool Format
 
-Tools must conform to the `AgentTool` interface:
+Tools must conform to the `AgentTool` interface with a **Zod schema**:
 
 ```typescript
-interface AgentTool {
+import { z } from "zod";
+
+interface AgentTool<TInput = any> {
   name: string;
   description: string;
-  schema: ZodSchema; // Zod schema for validation
-  func: (input: any) => Promise<string>;
+  schema: z.ZodType<TInput>; // Zod schema for input validation
+  func: (input: TInput) => Promise<string>;
 }
 ```
 
-Each framework implementation handles converting this generic format to its specific tool format.
+### Why Zod?
+
+Using Zod schemas provides:
+- **Type safety**: TypeScript types are inferred from the schema
+- **Runtime validation**: Input is validated before execution
+- **Framework compatibility**: Both LangChain and LangGraph accept Zod schemas natively
+- **Single source of truth**: Schema defines both types and validation rules
+
+### Example Tool Definition
+
+```typescript
+import { z } from "zod";
+
+const AddNodeSchema = z.object({
+  tag: z.string().min(1).describe("HTML tag name"),
+  text: z.string().optional().describe("Text content"),
+  attributes: z.record(z.string()).optional().describe("HTML attributes"),
+});
+
+type AddNodeInput = z.infer<typeof AddNodeSchema>;
+
+const addNodeTool: AgentTool<AddNodeInput> = {
+  name: "add_node",
+  description: "Append an HTML element to the document body",
+  schema: AddNodeSchema,
+  func: async (input) => {
+    // input is typed as AddNodeInput
+    const html = `<${input.tag}>${input.text || ""}</${input.tag}>`;
+    return JSON.stringify({ success: true, html });
+  },
+};
+```
+
+### Framework Translation
+
+Each wrapper automatically translates the Zod schema to the framework's format:
+
+- **LangChain**: `DynamicStructuredTool` accepts Zod schemas directly
+- **LangGraph**: Tools use Zod schemas for parameter validation
+
+No manual conversion is needed - just provide the Zod schema!
 

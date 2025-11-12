@@ -17,11 +17,11 @@ Rules:
 - Prefer semantic tags. Include helpful attributes like class or id when useful.
 - When done, reply with a short summary of what was built.`;
 
-function createAddNodeTool(sessionId: string): AgentTool {
+function createAddNodeTool(sessionId: string): AgentTool<AddNodeArgs> {
   return {
     name: "add_node",
     description: "Append an HTML element to the end of the <body> of the current document. Use for adding UI elements. Accepts tag, optional text, and attributes.",
-    schema: AddNodeArgsSchema,
+    schema: AddNodeArgsSchema, // Zod schema
     func: async (input: AddNodeArgs) => {
       console.log(`[${new Date().toISOString()}] 🔧 Tool called: add_node (session: ${sessionId})`);
       console.log(`[${new Date().toISOString()}] 🔧 Tool args:`, JSON.stringify(input, null, 2));
