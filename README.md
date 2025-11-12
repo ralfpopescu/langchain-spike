@@ -1,17 +1,17 @@
 # GraphQL Streaming LLM Chat UI Builder
 
-LLM-powered chat that incrementally builds and renders an HTML document via a single tool `add_node`. Apollo Server + Apollo Client with streaming over GraphQL subscriptions. Implemented in TypeScript with LangChain.js.
+LLM-powered chat that incrementally builds and renders an HTML document via a single tool `add_node`. Apollo Server + Apollo Client with streaming over GraphQL subscriptions. Implemented in TypeScript with LangGraph.
 
 ## Features
 
 - Streaming model tokens to the client via `messageDelta` subscription.
 - Tool calls surfaced immediately as events (`STARTED` → `PROGRESS` → `COMPLETED`).
 - `add_node` tool appends elements to `<body>` and streams `documentUpdated` events.
-- Agent iterates tool calls in a loop until completion (max 25 iterations).
+- Agent uses LangGraph's StateGraph to iterate tool calls in a loop until completion.
 
 ## Repo Layout
 
-- `server/`: Apollo Server (TypeScript), GraphQL schema, LangChain agent, tool, in-memory store.
+- `server/`: Apollo Server (TypeScript), GraphQL schema, LangGraph agent, tool, in-memory store.
 - `web/`: Vite React app with Apollo Client; shows chat, tool events, and rendered document.
 
 ## Run Locally

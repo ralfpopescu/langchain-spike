@@ -1,9 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
-import { z } from "zod";
-import { DynamicStructuredTool } from "@langchain/core/tools";
-import { AgentExecutor, createToolCallingAgent } from "langchain/agents";
-import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { StateGraph, MessagesAnnotation, START, END } from "@langchain/langgraph";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
+import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import { addNodeTool, AddNodeArgsSchema, AddNodeArgs } from "./tools/addNode.js";
 import { pubsub, topics } from "./pubsub.js";
 import { appendMessage, listMessages } from "./store.js";
@@ -16,20 +14,22 @@ Rules:
 - When done, reply with a short summary of what was built.`;
 
 function createAddNodeTool(sessionId: string): any {
-  const tool = (new DynamicStructuredTool({
+  return {
     name: "add_node",
     description: "Append an HTML element to the end of the <body> of the current document. Use for adding UI elements. Accepts tag, optional text, and attributes.",
     schema: AddNodeArgsSchema,
-    func: async (input: any) => {
-      const args = input as AddNodeArgs;
+    invoke: async (input: AddNodeArgs) => {
       console.log(`[${new Date().toISOString()}] 🔧 Tool called: add_node (session: ${sessionId})`);
-      console.log(`[${new Date().toISOString()}] 🔧 Tool args:`, JSON.stringify(args, null, 2));
-      const result = await addNodeTool(sessionId, args);
+      console.log(`[${new Date().toISOString()}] 🔧 Tool args:`, JSON.stringify(input, null, 2));
+      const result = await addNodeTool(sessionId, input);
       console.log(`[${new Date().toISOString()}] 🔧 Tool result: index=${result.index}, html=${result.html.substring(0, 50)}...`);
       return JSON.stringify({ ok: true, index: result.index });
     },
-  } as any));
-  return tool;
+    call: async function (input: string) {
+      const parsed = JSON.parse(input);
+      return this.invoke(parsed);
+    },
+  };
 }
 
 export async function runAgentStreaming(sessionId: string, userInput: string) {
@@ -43,25 +43,10 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
   });
 
   const tools = [createAddNodeTool(sessionId)];
-
-  const prompt = ChatPromptTemplate.fromMessages([
-    ["system", SYSTEM_PROMPT],
-    new MessagesPlaceholder("chat_history"),
-    ["human", "{input}"],
-    new MessagesPlaceholder("agent_scratchpad"),
-  ]);
-
-  const agent: any = await createToolCallingAgent({ llm: model, tools, prompt });
-
   console.log(`[${new Date().toISOString()}] 🔧 Available tools:`, tools.map(t => t.name));
 
-  const executor = new AgentExecutor({
-    agent,
-    tools,
-    maxIterations: 25,
-    returnIntermediateSteps: true,
-    verbose: true, // Enable verbose logging
-  });
+  // Bind tools to the model
+  const modelWithTools = model.bindTools(tools);
 
   // Get all messages EXCEPT the current user input (which is passed separately as 'input')
   // The current message was already appended to the store before this function was called
@@ -74,65 +59,95 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
         : new AIMessage(m.content)
     );
 
-  console.log(`[${new Date().toISOString()}] 🔄 Executing LLM agent (session: ${sessionId}, history length: ${history.length})`);
+  console.log(`[${new Date().toISOString()}] 🔄 Executing LangGraph agent (session: ${sessionId}, history length: ${history.length})`);
   console.log(`[${new Date().toISOString()}] 📋 Chat history:`, JSON.stringify(history, null, 2));
 
-  // Execute agent with streaming callbacks
-  console.log(`[${new Date().toISOString()}] ⏳ Starting agent execution...`);
+  // Define the function that calls the model
+  const callModel = async (state: typeof MessagesAnnotation.State) => {
+    const systemMessage = new SystemMessage(SYSTEM_PROMPT);
+    const messages = [systemMessage, ...state.messages];
 
-  let result;
-  try {
-    result = await executor.invoke(
-      {
-        input: userInput,
-        chat_history: history,
-      },
-      {
-        callbacks: [
-          {
-            handleLLMNewToken: async (token) => {
-              // Stream all tokens - OpenAI function calling returns either:
-              // - Tool calls (no content tokens, or minimal/structured tokens we can filter)
-              // - Text response (content tokens we want to stream)
-              // We'll stream everything and let the natural flow work
-              tokenCount++;
-              allTokens += token;
-              console.log(`[${new Date().toISOString()}] 🔄 Token #${tokenCount}: "${token}"`);
+    console.log(`[${new Date().toISOString()}] 🤖 Calling model with ${messages.length} messages`);
 
-              // Publish token to subscription
-              await pubsub.publish(topics.messageDelta(sessionId), {
-                messageDelta: { contentDelta: token },
-              });
-            },
+    const response = await modelWithTools.invoke(messages, {
+      callbacks: [
+        {
+          handleLLMNewToken: async (token: string) => {
+            tokenCount++;
+            allTokens += token;
+            console.log(`[${new Date().toISOString()}] 🔄 Token #${tokenCount}: "${token}"`);
+
+            // Publish token to subscription
+            await pubsub.publish(topics.messageDelta(sessionId), {
+              messageDelta: { contentDelta: token },
+            });
           },
-        ],
-      }
-    );
+        },
+      ],
+    });
 
-    console.log(`[${new Date().toISOString()}] ⏳ Agent execution completed`);
+    console.log(`[${new Date().toISOString()}] 🤖 Model response:`, JSON.stringify(response, null, 2));
+    return { messages: [response] };
+  };
+
+  // Define the conditional edge logic
+  const shouldContinue = (state: typeof MessagesAnnotation.State) => {
+    const lastMessage = state.messages[state.messages.length - 1];
+    console.log(`[${new Date().toISOString()}] 🔀 Checking if should continue. Last message type:`, lastMessage._getType());
+
+    // If the LLM makes a tool call, then we route to the "tools" node
+    if (lastMessage._getType() === "ai" && "tool_calls" in lastMessage) {
+      const aiMessage = lastMessage as AIMessage;
+      if (aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
+        console.log(`[${new Date().toISOString()}] 🔀 Routing to tools node (${aiMessage.tool_calls.length} tool calls)`);
+        return "tools";
+      }
+    }
+    // Otherwise, we stop (reply to the user)
+    console.log(`[${new Date().toISOString()}] 🔀 Routing to END`);
+    return END;
+  };
+
+  // Create the graph
+  const workflow = new StateGraph(MessagesAnnotation)
+    .addNode("agent", callModel)
+    .addNode("tools", new ToolNode(tools))
+    .addEdge(START, "agent")
+    .addConditionalEdges("agent", shouldContinue)
+    .addEdge("tools", "agent");
+
+  const graph = workflow.compile();
+
+  console.log(`[${new Date().toISOString()}] ⏳ Starting LangGraph execution...`);
+
+  try {
+    // Initialize state with chat history and new user input
+    const initialMessages = [...history, new HumanMessage(userInput)];
+
+    const result = await graph.invoke({
+      messages: initialMessages,
+    });
+
+    console.log(`[${new Date().toISOString()}] ⏳ LangGraph execution completed`);
+    console.log(`[${new Date().toISOString()}] 🔍 Raw result:`, JSON.stringify(result, null, 2));
+
+    // Extract the final AI response
+    const finalMessages = result.messages;
+    const lastAIMessage = [...finalMessages].reverse().find((m: BaseMessage) => m._getType() === "ai");
+
+    const content = lastAIMessage?.content?.toString() || "";
+
+    console.log(`[${new Date().toISOString()}] ✅ LLM call completed (session: ${sessionId}, total tokens: ${tokenCount})`);
+    console.log(`[${new Date().toISOString()}] 📥 All accumulated tokens: "${allTokens}"`);
+    console.log(`[${new Date().toISOString()}] 📤 LLM response content type: ${typeof content}, length: ${content?.length || 0}`);
+    console.log(`[${new Date().toISOString()}] 📤 LLM response: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`);
+
+    appendMessage(sessionId, { sessionId, role: "MODEL", content });
+    await pubsub.publish(topics.modelMessageCompleted(sessionId), { modelMessageCompleted: { done: true } });
+
+    return content;
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Agent execution error:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ LangGraph execution error:`, error);
     throw error;
   }
-
-  console.log(`[${new Date().toISOString()}] 🔍 Raw result object:`, JSON.stringify(result, null, 2));
-
-  // Log intermediate steps if available
-  if (result.intermediateSteps && result.intermediateSteps.length > 0) {
-    console.log(`[${new Date().toISOString()}] 🔧 Intermediate steps count: ${result.intermediateSteps.length}`);
-    result.intermediateSteps.forEach((step: any, idx: number) => {
-      console.log(`[${new Date().toISOString()}] 🔧 Step ${idx + 1}: action=${step.action?.tool}, output=${JSON.stringify(step.observation).substring(0, 100)}`);
-    });
-  }
-
-  const content = typeof result.output === "string" ? result.output : JSON.stringify(result.output);
-  console.log(`[${new Date().toISOString()}] ✅ LLM call completed (session: ${sessionId}, total tokens: ${tokenCount})`);
-  console.log(`[${new Date().toISOString()}] 📥 All accumulated tokens: "${allTokens}"`);
-  console.log(`[${new Date().toISOString()}] 📤 LLM response content type: ${typeof content}, length: ${content?.length || 0}`);
-  console.log(`[${new Date().toISOString()}] 📤 LLM response: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`);
-
-  appendMessage(sessionId, { sessionId, role: "MODEL", content });
-  await pubsub.publish(topics.modelMessageCompleted(sessionId), { modelMessageCompleted: { done: true } });
-
-  return content;
 }
