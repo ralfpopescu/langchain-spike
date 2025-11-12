@@ -15,19 +15,20 @@ Rules:
 - Prefer semantic tags. Include helpful attributes like class or id when useful.
 - When done, reply with a short summary of what was built.`;
 
-function createAddNodeTool(sessionId: string) {
-  const tool = new DynamicStructuredTool({
+function createAddNodeTool(sessionId: string): any {
+  const tool = (new DynamicStructuredTool({
     name: "add_node",
     description: "Append an HTML element to the end of the <body> of the current document. Use for adding UI elements. Accepts tag, optional text, and attributes.",
     schema: AddNodeArgsSchema,
-    func: async (input: AddNodeArgs): Promise<string> => {
+    func: async (input: any) => {
+      const args = input as AddNodeArgs;
       console.log(`[${new Date().toISOString()}] 🔧 Tool called: add_node (session: ${sessionId})`);
-      console.log(`[${new Date().toISOString()}] 🔧 Tool args:`, JSON.stringify(input, null, 2));
-      const result = await addNodeTool(sessionId, input);
+      console.log(`[${new Date().toISOString()}] 🔧 Tool args:`, JSON.stringify(args, null, 2));
+      const result = await addNodeTool(sessionId, args);
       console.log(`[${new Date().toISOString()}] 🔧 Tool result: index=${result.index}, html=${result.html.substring(0, 50)}...`);
       return JSON.stringify({ ok: true, index: result.index });
     },
-  });
+  } as any));
   return tool;
 }
 
@@ -50,7 +51,7 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
-  const agent = await createToolCallingAgent({ llm: model, tools, prompt });
+  const agent: any = await createToolCallingAgent({ llm: model, tools, prompt });
 
   console.log(`[${new Date().toISOString()}] 🔧 Available tools:`, tools.map(t => t.name));
 
@@ -79,10 +80,6 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
   // Execute agent with streaming callbacks
   console.log(`[${new Date().toISOString()}] ⏳ Starting agent execution...`);
 
-  // Track LLM call state to distinguish tool-planning from final response
-  let currentLLMStart: any = null;
-  let hasToolCalls = false;
-
   let result;
   try {
     result = await executor.invoke(
@@ -93,28 +90,6 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
       {
         callbacks: [
           {
-            handleLLMStart: async (llm, prompts, runId) => {
-              // Track start of new LLM call
-              currentLLMStart = { runId, hasStreamedTokens: false };
-              console.log(`[${new Date().toISOString()}] 🤖 LLM call started (runId: ${runId})`);
-            },
-            handleLLMEnd: async (output, runId) => {
-              // Check if this LLM call resulted in tool calls
-              const hasToolCallsInOutput = output?.generations?.[0]?.[0]?.message?.additional_kwargs?.tool_calls;
-              if (hasToolCallsInOutput) {
-                hasToolCalls = true;
-                console.log(`[${new Date().toISOString()}] 🔧 LLM call ended with tool calls (runId: ${runId})`);
-              } else {
-                console.log(`[${new Date().toISOString()}] ✅ LLM call ended without tool calls (runId: ${runId})`);
-              }
-              currentLLMStart = null;
-            },
-            handleAgentAction: async (action) => {
-              console.log(`[${new Date().toISOString()}] 🔧 Agent executing tool: ${action.tool}`);
-            },
-            handleToolEnd: async (output) => {
-              console.log(`[${new Date().toISOString()}] 🔧 Tool completed, output length: ${output.length}`);
-            },
             handleLLMNewToken: async (token) => {
               // Stream all tokens - OpenAI function calling returns either:
               // - Tool calls (no content tokens, or minimal/structured tokens we can filter)
@@ -123,7 +98,7 @@ export async function runAgentStreaming(sessionId: string, userInput: string) {
               tokenCount++;
               allTokens += token;
               console.log(`[${new Date().toISOString()}] 🔄 Token #${tokenCount}: "${token}"`);
-              
+
               // Publish token to subscription
               await pubsub.publish(topics.messageDelta(sessionId), {
                 messageDelta: { contentDelta: token },

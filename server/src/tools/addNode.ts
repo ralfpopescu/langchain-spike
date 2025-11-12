@@ -26,7 +26,7 @@ export async function addNodeTool(sessionId: string, args: AddNodeArgs) {
 
   const attrString = args.attributes
     ? Object.entries(args.attributes)
-      .map(([k, v]) => `${k}="${v.replaceAll('"', '&quot;')}"`)
+      .map(([k, v]) => `${k}="${v.replace(/"/g, '&quot;')}"`)
       .join(" ")
     : "";
   const open = attrString.length > 0 ? `<${args.tag} ${attrString}>` : `<${args.tag}>`;
